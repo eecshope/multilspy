@@ -270,7 +270,10 @@ class LanguageServerHandler:
     
         # Terminate/kill the process if it's still running
         if process.returncode is None:
-            await self._terminate_or_kill_process(process)
+            try:
+                await self._terminate_or_kill_process(process)
+            except psutil.NoSuchProcess:  # Process may have already terminated after receiving 'exit' command
+                pass
     
         # Close stdout and stderr pipes after process has exited
         # This is essential to prevent "I/O operation on closed pipe" errors and

@@ -8,26 +8,25 @@ The details of Language Specific configuration are not exposed to the user.
 import asyncio
 import dataclasses
 import json
-import time
 import logging
 import os
 import pathlib
 import threading
 from contextlib import asynccontextmanager, contextmanager
-from .lsp_protocol_handler.lsp_constants import LSPConstants
-from  .lsp_protocol_handler import lsp_types as LSPTypes
+from pathlib import PurePath
+from typing import AsyncIterator, Iterator, List, Dict, Optional, Union, Tuple
 
 from . import multilspy_types
-from .multilspy_logger import MultilspyLogger
+from .lsp_protocol_handler import lsp_types as LSPTypes
+from .lsp_protocol_handler.lsp_constants import LSPConstants
 from .lsp_protocol_handler.server import (
     LanguageServerHandler,
     ProcessLaunchInfo,
 )
 from .multilspy_config import MultilspyConfig, Language
 from .multilspy_exceptions import MultilspyException
+from .multilspy_logger import MultilspyLogger
 from .multilspy_utils import PathUtils, FileUtils, TextUtils
-from pathlib import PurePath
-from typing import AsyncIterator, Iterator, List, Dict, Optional, Union, Tuple
 from .type_helpers import ensure_all_methods_implemented
 
 
@@ -74,11 +73,15 @@ class LanguageServer:
         :return LanguageServer: A language specific LanguageServer instance.
         """
         if config.code_language == Language.PYTHON:
-            from multilspy.language_servers.jedi_language_server.jedi_server import (
-                JediServer,
-            )
+            # from multilspy.language_servers.jedi_language_server.jedi_server import (
+            #     JediServer,
+            # )
 
-            return JediServer(config, logger, repository_root_path)
+            # return JediServer(config, logger, repository_root_path)
+            from multilspy.language_servers.zubanls_server.zuban_language_server import (
+                ZubanLanguageServer,
+            )
+            return ZubanLanguageServer(config, logger, repository_root_path)
         elif config.code_language == Language.JAVA:
             from multilspy.language_servers.eclipse_jdtls.eclipse_jdtls import (
                 EclipseJDTLS,
@@ -364,6 +367,88 @@ class LanguageServer:
         file_buffer = self.open_file_buffers[uri]
         return file_buffer.contents
 
+    async def request_implementation(
+            self, relative_file_path: str, line: int, column: int
+    ) -> List[multilspy_types.Location]:
+        """
+        Raise a [textDocument/implementation]() request to the Language Server
+        for the symbol at the given line and column in the given file. Wait for the response and return the result.
+
+        :param relative_file_path: The relative path of the file that has the symbol for which declaration should be looked up
+        :param line: The line number of the symbol
+        :param column: The column number of the symbol
+
+        :return List[multilspy_types.Location]: A list of locations where the symbol is implemented
+        """
+
+        if not self.server_started:
+            self.logger.log(
+                "request_declaration called before Language Server started",
+                logging.ERROR,
+            )
+            raise MultilspyException("Language Server not started")
+
+        with self.open_file(relative_file_path):
+            # sending request to the language server and waiting for response
+            response = await self.server.send.implementation(
+                {
+                    LSPConstants.TEXT_DOCUMENT: {
+                        LSPConstants.URI: pathlib.Path(
+                            str(PurePath(self.repository_root_path, relative_file_path))
+                        ).as_uri()
+                    },
+                    LSPConstants.POSITION: {
+                        LSPConstants.LINE: line,
+                        LSPConstants.CHARACTER: column,
+                    },
+                }
+            )
+
+            ret: List[multilspy_types.Location] = []
+            if isinstance(response, list):
+                # response is either of type Location[] or LocationLink[]
+                for item in response:
+                    assert isinstance(item, dict)
+                    if LSPConstants.URI in item and LSPConstants.RANGE in item:
+                        new_item: multilspy_types.Location = {}
+                        new_item.update(item)
+                        new_item["absolutePath"] = PathUtils.uri_to_path(new_item["uri"])
+                        new_item["relativePath"] = PathUtils.get_relative_path(new_item["absolutePath"],
+                                                                               self.repository_root_path)
+                        ret.append(multilspy_types.Location(new_item))
+                    elif (
+                            LSPConstants.ORIGIN_SELECTION_RANGE in item
+                            and LSPConstants.TARGET_URI in item
+                            and LSPConstants.TARGET_RANGE in item
+                            and LSPConstants.TARGET_SELECTION_RANGE in item
+                    ):
+                        new_item: multilspy_types.Location = {}
+                        new_item["uri"] = item[LSPConstants.TARGET_URI]
+                        new_item["absolutePath"] = PathUtils.uri_to_path(new_item["uri"])
+                        new_item["relativePath"] = PathUtils.get_relative_path(new_item["absolutePath"],
+                                                                               self.repository_root_path)
+                        new_item["range"] = item[LSPConstants.TARGET_SELECTION_RANGE]
+                        ret.append(multilspy_types.Location(**new_item))
+                    else:
+                        assert False, f"Unexpected response from Language Server: {item}"
+            elif isinstance(response, dict):
+                # response is of type Location
+                assert LSPConstants.URI in response
+                assert LSPConstants.RANGE in response
+
+                new_item: multilspy_types.Location = {}
+                new_item.update(response)
+                new_item["absolutePath"] = PathUtils.uri_to_path(new_item["uri"])
+                new_item["relativePath"] = PathUtils.get_relative_path(new_item["absolutePath"],
+                                                                       self.repository_root_path)
+                ret.append(multilspy_types.Location(**new_item))
+            else:
+                # assert False, f"Unexpected response from Language Server: {response}"
+                ret = []
+
+            return ret
+
+
     async def request_definition(
         self, relative_file_path: str, line: int, column: int
     ) -> List[multilspy_types.Location]:
@@ -437,7 +522,8 @@ class LanguageServer:
             new_item["relativePath"] = PathUtils.get_relative_path(new_item["absolutePath"], self.repository_root_path)
             ret.append(multilspy_types.Location(**new_item))
         else:
-            assert False, f"Unexpected response from Language Server: {response}"
+            # assert False, f"Unexpected response from Language Server: {response}"
+            ret = []
 
         return ret
 
@@ -708,6 +794,7 @@ class SyncLanguageServer:
 
         If language is Java, then ensure that jdk-17.0.6 or higher is installed, `java` is in PATH, and JAVA_HOME is set to the installation directory.
 
+        :param timeout:
         :param repository_root_path: The root path of the repository (must be absolute).
         :param config: The Multilspy configuration.
         :param logger: The logger to use.
@@ -775,6 +862,12 @@ class SyncLanguageServer:
         asyncio.run_coroutine_threadsafe(ctx.__aexit__(None, None, None), loop=self.loop).result()
         self.loop.call_soon_threadsafe(self.loop.stop)
         loop_thread.join()
+
+    def request_implementation(self, file_path: str, line: int, column: int) -> List[multilspy_types.Location]:
+        result = asyncio.run_coroutine_threadsafe(
+            self.language_server.request_implementation(file_path, line, column), self.loop
+        ).result(timeout=self.timeout)
+        return result
 
     def request_definition(self, file_path: str, line: int, column: int) -> List[multilspy_types.Location]:
         """

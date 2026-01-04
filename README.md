@@ -1,6 +1,11 @@
 [![PyPI - Version](https://img.shields.io/pypi/v/multilspy)](https://pypi.org/project/multilspy/)
 # Multilspy: LSP client library in Python to build applications around language servers
 
+## Update: What this branch does
+1. Update the Python LSP to Zubanls
+2. Update the protocol `textDocument/implementation`
+3. For 'implementation' and 'definition', if LSP returns None, `multilspy` will return an empty list rather than raise an exception.
+
 ## Introduction
 This repository hosts `multilspy`, a library developed as part of research conducted for NeruIPS 2023 paper titled ["Monitor-Guided Decoding of Code LMs with Static Analysis of Repository Context"](https://neurips.cc/virtual/2023/poster/70362) (["Guiding Language Models of Code with Global Context using Monitors"](https://arxiv.org/abs/2306.10763) on Arxiv). The paper introduces Monitor-Guided Decoding (MGD) for code generation using Language Models, where a monitor uses static analysis to guide the decoding, ensuring that the generated code follows various correctness properties, like absence of hallucinated symbol names, valid order of method calls, etc. For further details about Monitor-Guided Decoding, please refer to the paper and GitHub repository [microsoft/monitors4codegen](https://github.com/microsoft/monitors4codegen).
 
