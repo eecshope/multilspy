@@ -55,6 +55,17 @@ class Position(TypedDict):
     If the character value is greater than the line length it defaults back to the
     line length. """
 
+class SemanticTokens(TypedDict):
+    """
+        Represents a semantic token, such as a text snippet.
+    """
+    line_no: int
+    """ Line number in a document (zero-based). """
+    offset: int
+    """ Character offset on a line in a document (zero-based). """
+    length: int
+    """ The length of the token. """
+
 
 class Range(TypedDict):
     """A range in a text document expressed as (zero-based) start and end positions.

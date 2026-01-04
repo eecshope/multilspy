@@ -16,8 +16,9 @@ from contextlib import asynccontextmanager, contextmanager
 from pathlib import PurePath
 from typing import AsyncIterator, Iterator, List, Dict, Optional, Union, Tuple
 
+from multilspy.multilspy_types import SemanticTokens
 from . import multilspy_types
-from .lsp_protocol_handler import lsp_types as LSPTypes
+from .lsp_protocol_handler import lsp_types as LSPTypes, lsp_types
 from .lsp_protocol_handler.lsp_constants import LSPConstants
 from .lsp_protocol_handler.server import (
     LanguageServerHandler,
@@ -366,6 +367,55 @@ class LanguageServer:
 
         file_buffer = self.open_file_buffers[uri]
         return file_buffer.contents
+
+    async def request_semantic_tokens_range(
+            self, relative_file_path: str, line: int
+    ):
+        """
+        Raise a [textDocument/semanticTokens/range]() request to the Language Server
+        for the given line in the given file. Wait for the response and return the result.
+
+        :param relative_file_path: The relative path of the file that has the line for which semantic tokens should be looked up
+        :param line: The line number for which semantic tokens should be looked up
+
+        :return List[multilspy_types.SemanticTokens]: A list of semantic tokens for the given line. If error occurs, return an empty list.
+        """
+        if not self.server_started:
+            self.logger.log(
+                "request_semanticToken_range called before Language Server started",
+                logging.ERROR,
+            )
+            raise MultilspyException("Language Server not started")
+
+        with self.open_file(relative_file_path):
+            # sending request to the language server and waiting for response
+            response = await self.server.send.semantic_tokens_range(
+                {
+                    LSPConstants.TEXT_DOCUMENT: {
+                        LSPConstants.URI: pathlib.Path(
+                            str(PurePath(self.repository_root_path, relative_file_path))
+                        ).as_uri()
+                    },
+                    LSPConstants.RANGE: {
+                        "start": {"line": line, "character": 0},
+                        "end": {"line": line + 1, "character": 0},
+                    },
+                }
+            )
+
+            ret: 'list[SemanticTokens]' = list[SemanticTokens]()
+            if 'data' not in response:
+                return ret
+            current_line_no = 0
+            current_offset = 0
+            for i in range(0, len(response["data"]), 5):
+                current_line_no += response["data"][i]
+                if response["data"][i] == 0:
+                    current_offset += response["data"][i + 1]
+                else:
+                    current_offset = response["data"][i + 1]
+                ret.append(SemanticTokens(line_no=current_line_no, offset=current_offset, length=response["data"][i + 2]))
+            return ret
 
     async def request_implementation(
             self, relative_file_path: str, line: int, column: int
@@ -862,6 +912,12 @@ class SyncLanguageServer:
         asyncio.run_coroutine_threadsafe(ctx.__aexit__(None, None, None), loop=self.loop).result()
         self.loop.call_soon_threadsafe(self.loop.stop)
         loop_thread.join()
+
+    def request_semantic_tokens_range(self, file_path: str, line: int):
+        result = asyncio.run_coroutine_threadsafe(
+            self.language_server.request_semantic_tokens_range(file_path, line), self.loop
+        ).result(timeout=self.timeout)
+        return result
 
     def request_implementation(self, file_path: str, line: int, column: int) -> List[multilspy_types.Location]:
         result = asyncio.run_coroutine_threadsafe(
